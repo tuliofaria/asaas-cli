@@ -130,6 +130,41 @@ asaas api /payments -X POST -f customer=cus_000005219613 -f billingType=PIX -F v
 
 Toda a documentação (tipos de flag, `[required]`, formato de saída) está no `--help` de cada comando.
 
+## Usando com agentes de IA
+
+A CLI foi feita para ser operada por agentes como Claude Code, Codex e Cursor: o agente descobre os comandos pelo `--help` e lê as respostas em JSON. Basta instalar o `asaas`, cadastrar uma conta e dar ao agente instruções como estas. Elas podem ir no `CLAUDE.md`, no `AGENTS.md` ou direto no chat:
+
+```text
+Você tem acesso à CLI `asaas` para operar minha conta no Asaas (API v3).
+
+- Antes de usar um comando, leia `asaas --help` e `asaas <comando> --help`.
+  O help mostra o tipo de cada flag e quais são [required].
+- Sucesso sai em JSON no stdout. Erro sai em JSON no stderr, com exit code
+  diferente de 0. Use jq para filtrar.
+- Em listagens, use --all quando precisar de todos os registros.
+- Para endpoints sem comando dedicado, use `asaas api <caminho>`.
+- Comandos de leitura (list, get, auth status) podem rodar à vontade.
+- Antes de qualquer comando que cria, altera, cancela ou emite algo (create,
+  update, delete, authorize, cancel, `asaas api -X POST/PUT/DELETE`), me
+  mostre exatamente o que vai rodar e espere minha confirmação. Emitir ou
+  cancelar nota fiscal não tem volta.
+- Na dúvida sobre a conta ou o ambiente, rode `asaas auth status`. Para
+  testar, use --sandbox.
+```
+
+Exemplos de pedidos:
+
+```text
+Liste as notas fiscais com status ERROR com data de emissão em setembro e
+outubro de 2026, agrupe pelo código de erro devolvido pela prefeitura e me
+diga quantas são e o valor total de cada grupo. Não altere nada.
+```
+
+```text
+Quais cobranças do cliente cus_000005219613 foram pagas no cartão pelo
+Asaas e quais foram baixadas manualmente como recebidas em dinheiro?
+```
+
 ## Estrutura
 
 ```
@@ -153,6 +188,66 @@ pkg/asaasclient/        cliente HTTP genérico (headers, erros, paginação)
 4. Registre o grupo em `cmd/root.go`.
 
 O teste `TestEveryCommandIsDocumented` falha se algum comando ficar sem `Short`/`Long` ou se alguma flag não documentar o tipo.
+
+## Como este projeto nasceu
+
+O esqueleto da CLI foi gerado por um agente de IA a partir do prompt abaixo. Os comandos de notas fiscais e o restante vieram depois, em pedidos menores na mesma conversa. Serve de ponto de partida se você quiser fazer algo parecido para outra API.
+
+<details>
+<summary>Prompt inicial (<code>/goal</code>)</summary>
+
+~~~~text
+/goal Objetivo: Criar uma CLI profissional em Go (Golang) inspirada na estrutura do gh (GitHub CLI) para interagir com a API do Asaas v3. A CLI será consumida por agentes de IA e automações locais. O projeto deve ser arquitetado para cobrir toda a API do Asaas através de uma estrutura altamente escalável.
+
+🛠️ Requisitos Técnicos e de Arquitetura
+
+1. Frameworks: Utilizar Cobra CLI para os comandos e Viper para gerenciar as configurações de arquivos e variáveis de ambiente.
+2. Hierarquia de Autenticação e Multi-Contas:
+	• Prioridade 1 (Variável de Ambiente): Verificar se existe a variável ASAAS_API_KEY. Se existir, utilizá-la imediatamente (ignora o arquivo de configuração). A flag global --sandbox define o ambiente correspondente.
+	• Prioridade 2 (Arquivo na Home): Se a variável de ambiente não estiver definida, ler o arquivo de configuração localizado em ~/.config/asaas/config.json.
+	• Estrutura do Mapa de Contas (config.json): O arquivo deve armazenar um mapa de contas identificadas por um apelido (nome), registrando para cada uma a Chave de API e se pertence ao ambiente Sandbox ou Produção. Deve haver uma chave active_account para indicar qual está em uso. Exemplo de estrutura desejada:
+	```json
+	{
+	  "active_account": "sandbox-dev",
+	  "accounts": {
+	    "sandbox-dev": { "api_key": "asaas_key_1...", "environment": "sandbox" },
+	    "producao-firma": { "api_key": "asaas_key_2...", "environment": "production" }
+	  }
+	}
+	```
+3. Gerenciamento de Ambiente em Tempo de Execução: Criar uma flag global --sandbox (booleana) para forçar o uso do ambiente de testes (https://asaas.com) ou --production para produção, independentemente do padrão da conta ativa.
+4. Arquitetura Escalável (Foco em Cobrir Toda a API):
+	• Criar um pacote interno de cliente HTTP genérico (ex: pkg/asaasclient).
+	• Esse cliente deve ser instanciado dinamicamente com base na conta ativa ou na variável de ambiente injetada. Deve gerenciar os headers globais (access_token, Content-Type) e tratar erros de rede.
+5. Formato de Saída (Foco em IA):
+	• Toda saída bem-sucedida deve ser enviada para o stdout estritamente em JSON estruturado e formatado (json.MarshalIndent). Desativar cores ou prompts interativos.
+	• Erros de rede ou respostas HTTP de erro devem ir para o stderr em formato JSON.
+
+🔍 Auto-Descoberta por IA via --help
+
+• Todos os comandos e subcomandos devem conter descrições Short e Long detalhadas.
+• Todas as flags do Cobra devem documentar o tipo de dado esperado de forma exata.
+• Parâmetros obrigatórios devem usar cmd.MarkFlagRequired(), garantindo que apareçam como [required] no --help.
+
+📁 Estrutura de Comandos e Contexto de Autenticação
+
+O agente deve estruturar a CLI incluindo um subcomando de autenticação:
+• asaas auth add --name "sandbox-dev" --key "sua_chave" --sandbox -> Adiciona/conecta uma nova conta ao mapa na Home do usuário.
+• asaas auth switch --name "sandbox-dev" -> Altera a conta ativa no arquivo JSON.
+• asaas auth status -> Retorna em JSON os dados da conta que está conectada no momento (ocultando parte da chave por segurança).
+• asaas customer [list|create|get|update|delete] -> Módulos normais da API do Asaas que consumirão a conta ativa.
+
+🚀 O que o agente deve entregar no primeiro passo:
+
+1. Arquivos main.go, go.mod e estrutura idiomática de pastas (/cmd, /pkg/asaasclient).
+2. Configuração do Viper para criar e ler a pasta ~/.config/asaas/ de forma nativa e multiplataforma.
+3. Implementação completa do grupo de comandos asaas auth [add|switch|status].
+4. Implementação do comando base de uma entidade (asaas customer list) já validando o fluxo: se resolve a autenticação via ENV ou via arquivo JSON da Home, efetuando o disparo do HTTP real.
+~~~~
+
+</details>
+
+O prompt dá `https://asaas.com` como endereço do sandbox, mas o certo é `https://api-sandbox.asaas.com/v3`. A CLI já usa o endereço correto.
 
 ## Licença
 
